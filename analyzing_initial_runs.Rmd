@@ -1,0 +1,545 @@
+---
+title: "Analyzing initial runs"
+author: "Jessie Berta-Thompson & Michelle DePrenger-Levin"
+date: "December 7, 2017"
+output: html_document
+---
+
+For report, I'm returning to old runs and making sure we've mined them for anything useful. This file (and it's dir)
+
+***********************************************************
+#Section 1. Set up
+
+#Clear the environment and check the working directory.
+```{r}
+rm(list=ls()) #clears environment
+gc() #garbage collect prompts R to free up memory
+setwd("Q:/Research/All_Projects_by_Species/Phacelia SPECIES/Phacelia_formosula/Phacelia formosula_abiotic/Modelling/BayesAss/Initial_exploration_completed_BayesAss_runs")
+getwd()
+```
+#Load in libraries needed for analyses
+```{r}
+library(sandwich)
+library(list)
+library(ggplot2)
+library(reshape2)
+```
+
+
+
+***********************************************************
+#Section 2. Visualize Trace files
+
+#Parse data files to get Iteration & LogProb values for 5 initial runs
+Find and read in trace files produced by BayesAss by these 5 preliminary runs, extract iteration number ("State") and log probability (LogProb) from each run, and all 105 migration rates, and output one dataframe containing all five labelled. This takes a moment, but not too long. 
+```{r}
+#make a list of the directories containing the different models (BayesAss run with different population definitions)
+inputdir <- c('default_with_settings_printed_12_7_17','testing_program_options_6_9_17','testing_mixing_delta30all_6_9_17','testing_mixing_deltaM30_deltaF40_deltaA40_6_9_17','testing_mixing_deltaM30_deltaF50_deltaA50_6_9_17')
+
+nicknames <- c('default', 'flexing options', 'mixing deltas M30 A30 F30', 'mixing deltas M30 A40 F40','mixing deltas M30 A50 F50')
+
+#loop over the different runs
+fiverunstrace <- lapply(1:length(inputdir), function(i){
+  modelname = nicknames[i]
+  print(sprintf("Working on run %i %s.",i,modelname))
+  out <- read.table(paste(inputdir[i],"/BA3trace.txt",sep=""),header=TRUE)
+  #Add a column to dataframe for model name
+  out$Run <- as.factor(modelname)
+  #create a new dataframe which is just the subset of the full dataset needed for first pass assessment of convergence
+  OUT <- out[,c("State","LogProb","Run")]
+  OUT #return dataframe
+  })
+  
+# Stack the 5 dataframes from 5 different runs into one giant one (rows on top of rows)
+allfivetraces.df <- do.call(rbind, fiverunstrace)
+# Rename columns (in order as above) to change "State" to more sensible "Iteration"
+names(allfivetraces.df)[names(allfivetraces.df)=="State"] <- "Iteration"
+#Make sure order is not realphabetized
+allfivetraces.df$Run <- factor(allfivetraces.df$Run, levels = nicknames) 
+
+#clean up as you go - done with intermediate list now that data is in dataframe.
+rm(fiverunstrace)
+gc()
+
+```
+#Make a little dataframe to represent the burnins
+needed for plotting.
+```{r}
+#little dataframe with burnin values (in order) for the 5 runs.
+burnins <- c(100000,1000000,2000000,2000000,2000000) #Later I'll want to plot the burnins. These aren't in trace file, so just store them here by hand.
+burn.df <- data.frame(burnins) 
+burn.df$Run <-  factor(nicknames, levels = nicknames)
+```
+
+#Set up a little formatting function (from Stack Overflow) that makes labelling on plot prettier
+```{r}
+#Little function that gets axes labels the way I like them 10x instead of 1e scientific notation
+fancy_scientific <- function(l) {
+     # turn in to character string in scientific notation
+     l <- format(l, scientific = TRUE)
+     #Make zero simple 0
+     l <- gsub("0e\\+00","0",l)
+     # quote the part before the exponent to keep all the digits
+     l <- gsub("^(.*)e", "'\\1'e", l)
+     # remove + after exponent, if exists. E.g.: (3x10^+2 -> 3x10^2) 
+     l <- gsub("e\\+","e",l) 
+     # turn the 'e+' into plotmath format
+     l <- gsub("e", "%*%10^", l)
+     # convert 1x10^ or 1.000x10^ -> 10^ 
+     #l <- gsub("\\'1[\\.0]*\\'\\%\\*\\%", "", l)
+     # return this as an expression
+     parse(text=l)
+}
+
+```
+
+#Actual plotting of 5 trace files. 
+```{r}
+ggplot(allfivetraces.df, aes(x = Iteration, y = LogProb))+
+  geom_line()+
+  labs(x = "Iteration", y= "Log probability")+
+  geom_rect(data = burn.df, aes(x=NULL, y=NULL, xmin=0, xmax=burnins, ymin=-Inf, ymax=Inf), alpha=0.5, fill="pink")+
+  theme_bw()+
+  facet_wrap(~Run, ncol=1)+
+  scale_x_continuous(labels=fancy_scientific)+
+  theme(strip.background = element_blank(), plot.margin=unit(c(0.25,0.25,0.25,0.25),"in"),  panel.grid.minor.x = element_blank())
+
+ggsave(file = "FiveInitialRuns_traceplots.pdf", width = 8, height = 10, units = "in")
+ggsave(file = "FiveInitialRuns_traceplots.png", dpi = 300, width = 6.5, height = 7, units = "in")
+
+```
+
+
+***********************************************************
+#Section 3. Plot parameter estimate results from these 5 runs
+
+#Parse BayesAss data files into dataframes: this time all the data
+Read data from in trace files produced by BayesAss, extract iteration number ("State"), log posterior probability ("LogProb"), and migration rates ("m.0..0.") from each model, and output one dataframe containing all models.
+```{r}
+#make a list of the directories containing the different models (BayesAss run with different population definitions)
+inputdir <- c('default_with_settings_printed_12_7_17','testing_program_options_6_9_17','testing_mixing_delta30all_6_9_17','testing_mixing_deltaM30_deltaF40_deltaA40_6_9_17','testing_mixing_deltaM30_deltaF50_deltaA50_6_9_17')
+
+nicknames <- c('default', 'flexing options', 'mixing deltas M30 A30 F30', 'mixing deltas M30 A40 F40','mixing deltas M30 A50 F50')
+
+#loop over the different runs
+fiverunsalldata <- lapply(1:length(inputdir), function(i){
+  modelname = nicknames[i]
+  print(sprintf("Working on run %i %s.",i,modelname))
+  out <- read.table(paste(inputdir[i],"/BA3trace.txt",sep=""),header=TRUE)
+  #Add a column to dataframe for model name
+  out$Run <- as.factor(modelname)
+  #create a new dataframe which is just the subset of the full dataset needed for first pass assessment of convergence
+  out
+  })
+  
+# Stack the 5 dataframes from 5 different runs into one giant one (rows on top of rows)
+allfiveruns.df <- do.call(rbind, fiverunsalldata)
+#Make sure order is not realphabetized
+allfiveruns.df$Run <- factor(allfiveruns.df$Run, levels = nicknames) 
+#Rename State -> Iteration
+colnames(allfiveruns.df)[1] <- "Iteration"
+#Save to avoid repeating this
+save(allfiveruns.df, file = "fivenitial_runs_dataframe_12_18_17.Rdata")
+
+#clean up as you go - done with intermediate list now that data is in dataframe.
+rm(fiverunsalldata)
+gc()
+
+```
+
+#Once already created, just load in results dataframe (faster)
+creates allfiveruns.df
+
+```{r}
+load("fivenitial_runs_dataframe_12_18_17.Rdata")
+```
+
+
+#Mapping population numbers assigned by program to population names
+In BayesAss results, populations are assigned to numbers. The mapping lives in a different BayesAss results file.  Extract the mapping between names and numbers from results files for each of these 5 runs. It should be the same for these 5, but I'll just check.
+```{r}
+#loop over the different population structures in directories
+mappinglol <- lapply(1:length(inputdir), function(i){
+  modelname = nicknames[i]
+  directory = inputdir[i]
+  
+  print(i)
+  print(modelname)
+  print(directory)
+  
+   # Find the results file
+  resultpath = list.files(path = directory, pattern = "results.txt", full.names = TRUE)[[1]]
+  print(resultpath)
+  resultconn = file(description = resultpath, open = "r")
+  #read in files
+  thelines <- readLines(resultconn, warn = FALSE)
+  close(resultconn)
+  
+  indices <- unlist(lapply(1:length(thelines), function(i) {
+    ifelse(grepl("0->", thelines[i]), TRUE, FALSE)
+    }))
+  
+  usefulline <- thelines[indices]
+  
+  print(usefulline)
+  
+  maps <- strsplit(usefulline, " ")[[1]][-1]
+  ordered_numbers<-lapply(maps, function(map){
+      number <- strsplit(map, "->")[[1]][1]
+      return(number)
+      })
+  ordered_names<-lapply(maps, function(map){
+      name <- strsplit(map, "->")[[1]][2]
+      return(name)
+      })
+  return(list(ordered_numbers, ordered_names))
+    })
+```
+
+
+#So far the dataframe is the full search. Make a modified dataframe that's just the posterior without the burnin.
+```{r}
+#loop over models, loading in data only as needed, from preprocessed R object, then cleaning up.
+listofnoburndf <- lapply(1:length(nicknames), function(i){ 
+
+  #which run are we on?
+  run = nicknames[[i]]
+  burn = burnins[i]
+  #pull one run's results
+  onerundf <- allfiveruns.df[allfiveruns.df$Run==run,]
+  
+  print(sprintf("Working on %s, which had a burnin of %s of a total length of run %s, with %s total samples saved.", run, burn, onerundf$Iteration[length(onerundf$Iteration)], length(onerundf$Run)))
+
+  #Remove burnin
+  postburn <- onerundf[onerundf$Iteration > burn,] #ditch some of MCMC run as burnin
+  
+  return(postburn)
+})
+
+# Stack the 5 dataframes from 5 different runs into one giant one (rows on top of rows)
+allfivepostburn.df <- do.call(rbind, listofnoburndf)
+
+#clean up as you go - done with intermediate list now that data is in dataframe.
+rm(listofnoburndf)
+gc()
+  
+  
+```
+
+#Loop over the post-burn dataset and calculate summary stats.
+```{r}
+#loop over runs
+listofsummarystatdataframes <- lapply(1:length(nicknames), function(i){ 
+
+  #which run are we on?
+  Run = nicknames[[i]]
+  #pull one run's results
+  onerunpostburn <- allfivepostburn.df[allfivepostburn.df$Run==Run,]
+  
+  #which columns contain migration rates? Not the first two (Iteration, LogProb), not the last one (Run).
+  m_indices <- c(1:length(names(onerunpostburn)))[-c(1:2,length(names(onerunpostburn)))]
+  
+  #which mapping scheme to use?
+  mapping <- mappinglol[[i]]
+
+  mcounts <- c(NA, NA, 1:length(m_indices), NA)
+  #loop over migration rate columns again and calculate means, standard deviations, medians, 2.5th and 97.5th percentiles
+  one_run_allms_summarystats_lol <- lapply(m_indices, function(m){
+      Parameter <- names(onerunpostburn)[m] #grab column header
+      tofrom <- strsplit(Parameter, "\\.")[[1]][c(2,4)] #pull just numbers from m.0..0. structure of names
+      toname <- mapping[[2]][which(mapping[[1]]== tofrom[1])] #map first number to correct population name
+      fromname <- mapping[[2]][which(mapping[[1]]== tofrom[2])] #map second number to correct population name
+      #construct a more descriptive name
+      Migration <-  paste("Fraction of ", toname, " from ", fromname, sep = "") 
+      #class() str()
+      From <- fromname[[1]]
+      To <- toname[[1]]
+      Mean <- mean(onerunpostburn[,m])
+      StDev <- sd(onerunpostburn[,m])
+      Median <- median(onerunpostburn[,m])
+      q25975 <- quantile(onerunpostburn[,m],c(0.025,0.975))
+      Low25CI <- q25975[1]
+      High975CI<- q25975[2]
+      #make a dataframe (of one row) for this migration rate
+      onemrow <- data.frame(Run, Parameter, Migration,To, From, Mean, StDev, Median, Low25CI, High975CI) #From, To,
+      return(onemrow)
+      })#end loop over migration rate pairs
+  
+  #combine results for all migration rate pairs into one dataframe
+  allms_onerun_df <- do.call(rbind,one_run_allms_summarystats_lol)
+  
+  #produce a list of dataframes, one for each run
+  return(allms_onerun_df)
+})
+
+# Stack the 5 dataframes from 5 different runs into one giant one (rows on top of rows)
+allfivestats.df <- do.call(rbind, listofsummarystatdataframes)
+
+
+```
+
+#Exploring plotting with Michelle
+#Ideas for things to add for this one (as time)
+Label with human readable mapping to migration rates
+Figure out scaling - meaning of various y-axis options - one version with scaled, one with counts
+tweak colors to see more
+plot medians in matching colors
+plot priors (lines or bars for scaled ones.)
+Try one version on self-scale, one on same scale of whole prior. 
+
+```{r}
+#which columns contain migration rates? Not the first two (Iteration, LogProb), not the last one (Run).
+m_indices <- c(1:length(names(allfivepostburn.df)))[-c(1:2,length(names(allfivepostburn.df)))]
+
+nothing <- lapply(m_indices, function(m){
+  onem <- allfivepostburn.df[,c(m,228)]
+  ggplot(onem, aes_string(names(x=allfivepostburn.df)[m],group=names(allfivepostburn.df)[228], fill=names(allfivepostburn.df)[228], color=names(allfivepostburn.df)[228]))+
+    geom_density(aes(y=..count..),alpha=0.15)+ # ..density.. ..scaled.. ..count..
+    theme_bw()
+  thism <- colnames(onem)[1]
+  print(thism)
+  filename1 = paste(thism, "testing.pdf", sep = "_")
+  ggsave(file = filename1, width = 16, height = 10, units = "in")
+    
+      })#end loop over migration rate pairs
+```
+
+#Same as above, but just median +/- sd
+
+
+#Heat maps showing all 210 in a square. * gets complicated - need different scale for middles. 
+```{r}
+onerun <- allfivestats.df[allfivestats.df$Run=="default",]
+
+replacemedna <- onerun
+selfindex <- replacemedna$To == replacemedna$From
+
+replacemedna$Median[selfindex] <- NA 
+#onerunoffdiag <- onerun[onerun$To!=onerun$From,]
+
+
+
+ggplot(data = replacemedna, aes(To, ordered(From, levels =rev(sort(unique(From)))), fill = Median))+
+ geom_tile(color = "white")+
+ scale_fill_gradient(low = "white", high = "black", space = "Lab", na.value = "pink", name="Posterior Median migration rate \nFraction of 'To' population from 'From' population", limit = c(0, (1/3))) +
+  theme_minimal()+ 
+ #theme(axis.text.x = element_text(angle = 45, vjust = 1, size = 12, hjust = 1))+
+ coord_fixed()+
+  scale_x_discrete(position = "top")+
+  ylab("From")
+
+```
+
+
+#make that into a loop over the runs (put in report)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Another attempt - just started - needs lots of editing from an old one. 
+### First plot separately each m
+```{r}
+#loop over models (one final plot per model scenario)
+lapply(1:length(), function(i) {
+  run <- nicknames[[i]]
+  thisrun <- allfivestats.df[allfivestats.df$Run==run,]
+  
+  storagedir <- "Q:/Research/All_Projects_by_Species/Phacelia SPECIES/Phacelia_formosula/Phacelia formosula_abiotic/Modelling/BayesAss/Initial_exploration_completed_BayesAss_runs"
+
+  filetosave <- paste(storagedir, "/freq_migration_reps_", amodel, ".jpg", sep = "" )
+  ggplot(justthismodeldf, aes(Rep,Mean))+
+    geom_point(size = 0.5)+
+    geom_ribbon(aes(ymin=Percentile025, ymax=Percentile975), alpha = 0.2, fill = "blue")+
+    #geom_errorbar(aes(ymin=Mean-StandardDeviation, ymax=Mean+StandardDeviation), width= 0.1)+
+    facet_wrap(~MigrationPairName)+
+    expand_limits(x = 0, y = 0)+
+    scale_x_continuous(expand = c(0, 0), limits = c(1,20)) + 
+    scale_y_continuous(expand = c(0, 0), limits = c(0,1))+
+    ggsave(filename = filetosave)
+ 
+})
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+***********************************************************
+#Appendices. Old code that might help
+
+#Plot probability traces as 5 stacked plots with maxing axes
+First a little testing on one to get the hang of slicing
+```{r}
+onedf = fiverunstrace[[1]]
+filename = paste(nicknames[1], "logprobabilitytraces.pdf", sep = "_")
+print(sprintf("Working on making %s", filename))
+burn.df <- data.frame(burnins)
+rownames(burn.df) <- nicknames
+
+pdf(filename, width = 8, height = 4)
+ggplot(onedf, aes(State,LogProb,group=Run))+
+  geom_line()+
+  #facet_wrap(~rep)+
+  labs(x = "Iteration", y= "Log probability")+
+  theme(axis.text.x=element_text(angle=90,hjust=1))+
+  ggtitle(nicknames[1])+
+  annotate("rect", xmin = 0, xmax = burnins[1], ymin = -Inf, ymax = Inf, alpha = .2)
+dev.off()
+```
+
+
+Implementation for full dataset and refinement of plots
+```{r}
+for(i in 1:length(models_replicates)){
+  model = models_replicates[[i]]$model[1]
+  filename = paste(model, "20logprobabilitytraces.pdf", sep = "_")
+  print(filename)
+  theplot <- ggplot(models_replicates[[i]], aes(State,LogProb,group=rep))+
+    geom_line(size=0.2)+
+    expand_limits(x = 0)+
+    scale_x_continuous(expand = c(0, 0), limits = c(0,20000000))+
+    facet_wrap(~rep)+
+    labs(x = "Iteration", y= "Log probability")+
+    theme(axis.text.x=element_text(angle=90,hjust=1), strip.background = element_blank(), panel.spacing = unit(1.0, "lines"), plot.margin=unit(c(0.25,0.25,0.25,0.25),"in"))+
+    ggtitle(model)+
+    annotate("rect", xmin = 0, xmax = 3000000, ymin = -Inf, ymax = Inf, alpha = .2)
+
+  ggsave(file = filename, width = 16, height = 10, units = "in")
+}
+```
+And again as pngs (requires some adjustments to look ok)
+```{r}
+for(i in 1:length(models_replicates)){
+  model = models_replicates[[i]]$model[1]
+  filename = paste(model, "20logprobabilitytraces.png", sep = "_")
+  print(filename)
+  theplot <- ggplot(models_replicates[[i]], aes(State,LogProb,group=rep))+
+    geom_line(size = 0.2)+
+    expand_limits(x = 0)+
+    scale_x_continuous(expand = c(0, 0), limits = c(0,20000000))+
+    facet_wrap(~rep)+
+    labs(x = "Iteration", y= "Log probability")+
+    theme(axis.text.x=element_text(angle=90,hjust=1), strip.background = element_blank(), panel.spacing = unit(0.9, "lines"), plot.margin=unit(c(0.25,0.25,0.25,0.25),"in"))+
+    ggtitle(model)+
+    annotate("rect", xmin = 0, xmax = 3000000, ymin = -Inf, ymax = Inf, alpha = .2)
+
+  ggsave(file = filename, width = 10, height = 6, units = "in")
+}
+```
+
+Set up to plot traces as 20 together
+```{r}
+for(i in 1:length(models_replicates)){
+  model = models_replicates[[i]]$model[1]
+  filename = paste(model, "20logprobabilitytraces_oneplot.pdf", sep = "_")
+  print(filename)
+  ggplot(models_replicates[[i]], aes(State,LogProb,colour=as.factor(rep)))+
+    geom_line(size = 0.2)+
+    labs(x = "Iteration", y= "Log probability")+
+    expand_limits(x = 0)+
+    scale_x_continuous(expand = c(0, 0), limits = c(0,20000000))+
+    theme_bw()+
+    theme(axis.text.x=element_text(angle=90,hjust=1))+
+    ggtitle(model)+
+    annotate("rect", xmin = 0, xmax = 3000000, ymin = -Inf, ymax = Inf, alpha = .2)+
+    labs(colour = "Replicate\nRuns")
+
+  ggsave(file = filename, width = 11, height = 6, units = "in")
+}
+```
+
+pngs for above (20 on one plot)
+```{r}
+for(i in 1:length(models_replicates)){
+  model = models_replicates[[i]]$model[1]
+  filename = paste(model, "20logprobabilitytraces_oneplot.png", sep = "_")
+  print(filename)
+  ggplot(models_replicates[[i]], aes(State,LogProb,colour=as.factor(rep)))+
+    geom_line(size = 0.1)+
+    labs(x = "Iteration", y= "Log probability")+
+    expand_limits(x = 0)+
+    scale_x_continuous(expand = c(0, 0), limits = c(0,20000000))+
+    theme_bw()+
+    theme(axis.text.x=element_text(angle=90,hjust=1))+
+    ggtitle(model)+
+    annotate("rect", xmin = 0, xmax = 3000000, ymin = -Inf, ymax = Inf, alpha = .2)+
+    labs(colour = "Replicate\nRuns")
+
+  ggsave(file = filename, width = 11, height = 6, units = "in")
+}
+```
+
+ 
+ Additional trace analyses to do:
+ plot migration rates over time
+ plot correlations between parameters?
+ calculate estimated sample size (find R package)
+ extract mixing info from log files
+ 
+ 
+Michelle's tiff preferences
+```{r}
+ 
+  tiff(paste("Q:/Research/All_Projects_by_Species/Phacelia SPECIES/Phacelia_formosula/Phacelia formosula_abiotic/Modelling/BayesAss/TracePlots","/dir",i,".tiff",sep=""),width = 100, height = 100, 
+       compression="lzw", units = "mm", res=1200)
+  
+  ggplot(models_replicates[[i]], aes(State,LogProb,group=rep))+
+  geom_line()+
+  facet_wrap(~rep)
+  
+  dev.off()
+
+```
+
